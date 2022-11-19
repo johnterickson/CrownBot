@@ -8,15 +8,25 @@ from util.drive import *
 from util.sequence import Sequence, ControlStep
 from util.vec import Vec3
 
-def angle_to_target(car: PlayerInfo, target: Vec3) -> float:
+def angle_to_target_radians(car: PlayerInfo, target: Vec3) -> float:
     relative = relative_location(Vec3(car.physics.location), Orientation(car.physics.rotation), target)
     return math.atan2(relative.y, relative.x)
 
-def angle_to_target_degrees(car: PlayerInfo, target: Vec3) -> float:
-    return angle_to_target(car, target) * 180.0 / 3.14
+def radians_to_degrees(a: float) -> float:
+    return normalize_angle_degrees(a * 180.0 / math.pi)
 
-def field_direction(src: Vec3, target: Vec3) -> float:
-    return math.atan2(target.y - src.y, target.x - src.x) * 180.0 / 3.14
+def angle_to_target_degrees(car: PlayerInfo, target: Vec3) -> float:
+    return radians_to_degrees(angle_to_target_radians(car, target))
+
+def compass_to_target(src: Vec3, target: Vec3) -> float:
+    return radians_to_degrees(math.atan2(target.y - src.y, target.x - src.x) * 180.0 / 3.14)
+
+def normalize_angle_degrees(a: float) -> float:
+    if a < -180.0:
+        return a + 360.0
+    if a > 180.0:
+        return a - 360.0
+    return a
 
 class MyBot(BaseAgent):
 
@@ -50,6 +60,7 @@ class MyBot(BaseAgent):
         my_car = packet.game_cars[self.index]
         car_location = Vec3(my_car.physics.location)
         car_velocity = Vec3(my_car.physics.velocity)
+        car_compass = my_car.physics.rotation.yaw
         ball_location = Vec3(packet.game_ball.physics.location)
         ball_velocity = Vec3(packet.game_ball.physics.velocity)
 
@@ -60,7 +71,7 @@ class MyBot(BaseAgent):
         ball_radius = 92
 
         distance_to_ball = car_location.dist(ball_location)
-        car_to_ball_compass = field_direction(car_location, ball_location)
+        car_to_ball_compass = compass_to_target(car_location, ball_location)
 
         if self.team == 0:
             opponent_goal_location = Vec3(0, 5120, 0)
@@ -76,44 +87,27 @@ class MyBot(BaseAgent):
         closest_point_on_ball_to_car = ball_location + ball_radius * ball_to_car_vector.normalized()
         self.renderer.draw_rect_3d(closest_point_on_ball_to_car, 4, 4, True, self.renderer.cyan(), centered=True)
 
-        if ball_distance_to_opponent_goal + 1 < ball_distance_to_my_goal:
+
+        if ball_distance_to_opponent_goal - ball_radius < ball_distance_to_my_goal:
             # offense
             goal_to_ball = ball_location - opponent_goal_location
             goal_to_ball = goal_to_ball.normalized()
 
-            ball_to_goal_compass = field_direction(ball_location, opponent_goal_location)
-            
+            self.renderer.draw_string_3d(car_location, 1, 1, f'shoot!', self.renderer.white())
+            point_on_ball_opposite_of_goal = ball_location + ball_radius * goal_to_ball
+            self.renderer.draw_rect_3d(point_on_ball_opposite_of_goal, 4, 4, True, self.renderer.green(), centered=True)
 
-            lined_up_for_shot_angle_difference = abs(ball_to_goal_compass - car_to_ball_compass)
-
-            distance_to_line_up_shot = 5 * ball_radius
-
-            if distance_to_ball < distance_to_line_up_shot and lined_up_for_shot_angle_difference < 45 and ball_location.z < 2 * ball_radius:
-                self.renderer.draw_string_3d(car_location, 1, 1, f'shoot!', self.renderer.white())
-                point_on_ball_opposite_of_goal = ball_location + ball_radius * goal_to_ball
-                self.renderer.draw_rect_3d(point_on_ball_opposite_of_goal, 4, 4, True, self.renderer.green(), centered=True)
-
-                target_location = closest_point_on_ball_to_car
-                aiming_adjustment = point_on_ball_opposite_of_goal - closest_point_on_ball_to_car
-                target_location = target_location + 2.5 * aiming_adjustment
-            else:
-                self.renderer.draw_string_3d(car_location, 1, 1, f'Setting up for shot', self.renderer.white())
-                target_location = ball_location + (distance_to_line_up_shot - 100.0) * goal_to_ball
+            target_location = closest_point_on_ball_to_car
+            aiming_adjustment = point_on_ball_opposite_of_goal - closest_point_on_ball_to_car
+            target_location = target_location + 2.5 * aiming_adjustment
+            target_location = ball_location + ball_radius * (target_location - ball_location).normalized()
         else:
             # defense
-            distance_to_line_up_to_clear = 2*ball_radius
-
-            my_goal_to_ball_compass = field_direction(my_goal_location, ball_location)
-            angle_difference = abs(car_to_ball_compass - my_goal_to_ball_compass)
             self.renderer.draw_string_3d(car_location, 1, 1, f'           distance_to_ball: {distance_to_ball:.1f}', self.renderer.white())
 
-            if distance_to_ball < 1.2*distance_to_line_up_to_clear and angle_difference < 80 and ball_location.z < 2 * ball_radius:
-                self.renderer.draw_string_3d(car_location, 1, 1, f'CLEAR!', self.renderer.white())
-                target_location = ball_location
-            else:
-                self.renderer.draw_string_3d(car_location, 1, 1, f'AH DEFENSE!', self.renderer.white())
-                ball_to_my_goal = (my_goal_location - ball_location).normalized()
-                target_location = ball_location + 0.9*distance_to_line_up_to_clear*ball_to_my_goal
+            self.renderer.draw_string_3d(car_location, 1, 1, f'AH DEFENSE!', self.renderer.white())
+            ball_to_my_goal = (my_goal_location - ball_location).normalized()
+            target_location = ball_location + 0.9*ball_radius*ball_to_my_goal
 
         # By default we will chase the ball, but target_location can be changed later
         
@@ -141,17 +135,21 @@ class MyBot(BaseAgent):
         controls = SimpleControllerState()
         # You can set more controls if you want, like controls.boost.
 
+        # boost during kickoff
         ball_kickoff_location = Vec3(0.0, 0.0, ball_radius)
         ball_to_kickoff_distance = ball_location.dist(ball_kickoff_location)
-        # print(f'ball_to_kickoff_distance {ball_to_kickoff_distance}')
-
         is_ball_at_center = ball_to_kickoff_distance < 0.1 * ball_radius
-
         ball_speed = ball_velocity.length()
         is_ball_still = ball_speed < 0.1
         is_kickoff = is_ball_at_center and is_ball_still
-
         if is_kickoff:
+            controls.boost = True
+
+        # boost to catch up
+        car_to_target_compass = compass_to_target(car_location, target_location)
+        is_car_kinda_facing_the_right_way = abs(car_to_target_compass - car_compass) < 22.5
+        is_ball_far_away = ball_location.flat().dist(car_location.flat()) > 4.0 * ball_radius
+        if is_ball_far_away and is_car_kinda_facing_the_right_way:
             controls.boost = True
 
         steering_angle = angle_to_target_degrees(my_car, target_location)
@@ -172,6 +170,9 @@ class MyBot(BaseAgent):
         else:
             controls.steer = limit_to_safe_range(steering_angle * steering_strength)
             controls.throttle = 1.0
+
+        if controls.throttle < 0.0:
+            controls.boost = False
 
         return controls
 

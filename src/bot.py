@@ -51,6 +51,7 @@ class MyBot(BaseAgent):
         car_location = Vec3(my_car.physics.location)
         car_velocity = Vec3(my_car.physics.velocity)
         ball_location = Vec3(packet.game_ball.physics.location)
+        ball_velocity = Vec3(packet.game_ball.physics.velocity)
 
         # other_car_index = 1 - self.index
         # other_car = packet.game_cars[other_car_index]
@@ -140,7 +141,18 @@ class MyBot(BaseAgent):
         controls = SimpleControllerState()
         # You can set more controls if you want, like controls.boost.
 
-        # controls.boost = True
+        ball_kickoff_location = Vec3(0.0, 0.0, ball_radius)
+        ball_to_kickoff_distance = ball_location.dist(ball_kickoff_location)
+        # print(f'ball_to_kickoff_distance {ball_to_kickoff_distance}')
+
+        is_ball_at_center = ball_to_kickoff_distance < 0.1 * ball_radius
+
+        ball_speed = ball_velocity.length()
+        is_ball_still = ball_speed < 0.1
+        is_kickoff = is_ball_at_center and is_ball_still
+
+        if is_kickoff:
+            controls.boost = True
 
         steering_angle = angle_to_target_degrees(my_car, target_location)
         # self.renderer.draw_string_3d(car_location, 1, 10, f'Angle: {steering_angle:.1f}', self.renderer.white())
